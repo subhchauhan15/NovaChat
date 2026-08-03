@@ -1,6 +1,7 @@
 from langchain_text_splitters import SentenceTransformersTokenTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from dotenv import load_dotenv
+from langchain_chroma import Chroma
 from pathlib import Path
 import requests
 import os
@@ -53,5 +54,14 @@ def get_nvidia_embeddings():
     data = response.json()
     embedding = data["data"][0]["embedding"]
     print(len(embedding))
+    return embedding
 
-ret=get_nvidia_embeddings()
+
+def load_vectorstore(persist_dir="chroma_db"):
+    embedding_model = get_nvidia_embeddings()
+    return Chroma(
+        persist_directory=persist_dir,
+        embedding_function=embedding_model,
+        collection_name="nova_policy"
+    )
+
