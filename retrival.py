@@ -23,45 +23,44 @@ def load_docs():
 
     return docs
 
-def get_nvidia_embeddings():
+def load_vectorstore(persist_dir="chroma_db"):
     docs = load_docs()
-    headers={
+
+    text_splitter = SentenceTransformersTokenTextSplitter(
+        chunk_size=433,
+        chunk_overlap=0
+    )
+    chunks = text_splitter.split_documents(docs)
+
+    headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json"
     }
-
-    text_splitter = SentenceTransformersTokenTextSplitter(
-    chunk_size=433,
-    chunk_overlap=0
-    )
-
-    chunks=text_splitter.split_documents(docs)
-
-    print(f"Number of chunks created: {len(chunks)}")
-
-    # Optional: inspect a sample chunk
-    # if chunks:
-        # print("Sample chunk content:\n", chunks[0].page_content[:300])
-        # print("Sample chunk metadata:\n", chunks[0].metadata)
-
-    embeddings = []
     payload = {
-            "model": "nvidia/nv-embed-v1",
-            "input": [chunk.page_content for chunk in chunks]
+        "model": "nvidia/nv-embed-v1",
+        "input": [chunk.page_content for chunk in chunks]
     }
-    response = requests.post(headers=headers, url=NVIDIA_EMBEDDINGS_URL, json = payload)
-
+    response = requests.post(headers=headers, url=NVIDIA_EMBEDDINGS_URL, json=payload)
     data = response.json()
-    embedding = data["data"][0]["embedding"]
-    print(len(embedding))
-    return embedding
 
+    embeddings_list = [item["embedding"] for item in data["data"]]
 
-def load_vectorstore(persist_dir="chroma_db"):
-    embedding_model = get_nvidia_embeddings()
-    return Chroma(
+    print(f"Chunks: {len(chunks)}, Embeddings: {len(embeddings_list)}")  
+
+    vector_store = Chroma(
         persist_directory=persist_dir,
-        embedding_function=embedding_model,
         collection_name="nova_policy"
     )
 
+    vector_store.add_texts(
+        texts=[chunk.page_content for chunk in chunks],
+        embeddings=embeddings_list,
+        metadatas=[chunk.metadata for chunk in chunks]
+    )
+    print("TEXT:", chunks[0].page_content[:300])
+    print("METADATA:", chunks[0].metadata)
+    print("EMBEDDING (first 5 values):", embeddings_list[0][:5])
+    print("EMBEDDING LENGTH:", len(embeddings_list[0]))
+    return vector_store
+
+z=load_vectorstore()
