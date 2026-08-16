@@ -1,20 +1,51 @@
 from langchain_text_splitters import SentenceTransformersTokenTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
+from langchain_core.embeddings import Embeddings
+from jinja2 import Environment, FileSystemLoader
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from pathlib import Path
 import requests
 import os
-# from lagchain_chroma
 
 load_dotenv()
-NVIDIA_EMBEDDINGS_URL="https://integrate.api.nvidia.com/v1/embeddings"
+NVIDIA_EMBEDDINGS_URL = "https://integrate.api.nvidia.com/v1/embeddings"
 
-API_KEY=os.getenv("NVIDIA_API_KEY")
-# print(API_KEY)
+env = Environment(loader=FileSystemLoader("."))
+template = env.get_template("prompt.jinja")
+
+API_KEY = os.getenv("NVIDIA_API_KEY")
+
+class NvidiaEmbeddings(Embeddings):
+    def __init__(self, api_key, url=NVIDIA_EMBEDDINGS_URL, model="nvidia/nv-embed-v1"):
+        self.api_key = api_key
+        self.url = url
+        self.model = model
+
+    def _embed(self, texts):
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": self.model,
+            "input": texts
+        }
+        response = requests.post(headers=headers, url=self.url, json=payload)
+        data = response.json()
+        return [item["embedding"] for item in data["data"]]
+
+    def embed_documents(self, texts):
+        # PDF chunks embed karne ke liye (add_texts ke waqt)
+        return self._embed(texts)
+
+    def embed_query(self, text):
+        # User ki query embed karne ke liye (retriever.invoke ke waqt)
+        return self._embed([text])[0]
+
+
 def load_docs():
     docs = []
-
     pdf_folder = Path("to_do") / "Nova.ai_Policy"
 
     for pdf in pdf_folder.glob("*.pdf"):
@@ -23,7 +54,22 @@ def load_docs():
 
     return docs
 
+
 def load_vectorstore(persist_dir="chroma_db"):
+    embedding_fn = NvidiaEmbeddings(api_key=API_KEY)
+
+    vector_store = Chroma(
+        persist_directory=persist_dir,
+        collection_name="nova_policy",
+        embedding_function=embedding_fn   
+    )
+
+    existing = vector_store.get()
+    if existing and len(existing["ids"]) > 0:
+        print(f"Existing vectorstore mil gaya ({len(existing['ids'])} chunks), re-embedding skip kar rahe hain...")
+        return vector_store
+
+    # Sirf pehli baar (jab collection empty ho) ye chalega
     docs = load_docs()
 
     text_splitter = SentenceTransformersTokenTextSplitter(
@@ -32,35 +78,53 @@ def load_vectorstore(persist_dir="chroma_db"):
     )
     chunks = text_splitter.split_documents(docs)
 
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "nvidia/nv-embed-v1",
-        "input": [chunk.page_content for chunk in chunks]
-    }
-    response = requests.post(headers=headers, url=NVIDIA_EMBEDDINGS_URL, json=payload)
-    data = response.json()
-
-    embeddings_list = [item["embedding"] for item in data["data"]]
-
-    print(f"Chunks: {len(chunks)}, Embeddings: {len(embeddings_list)}")  
-
-    vector_store = Chroma(
-        persist_directory=persist_dir,
-        collection_name="nova_policy"
+    embeddings_list = embedding_fn.embed_documents(
+        [chunk.page_content for chunk in chunks]
     )
+
+    print(f"Chunks: {len(chunks)}, Embeddings: {len(embeddings_list)}")
 
     vector_store.add_texts(
         texts=[chunk.page_content for chunk in chunks],
         embeddings=embeddings_list,
         metadatas=[chunk.metadata for chunk in chunks]
     )
-    print("TEXT:", chunks[0].page_content[:300])
-    print("METADATA:", chunks[0].metadata)
-    print("EMBEDDING (first 5 values):", embeddings_list[0][:5])
-    print("EMBEDDING LENGTH:", len(embeddings_list[0]))
+
     return vector_store
 
-z=load_vectorstore()
+
+def main():
+    url = "https://integrate.api.nvidia.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    vec = load_vectorstore()
+    retriever = vec.as_retriever(search_type="mmr", k=2)
+
+    while True:
+        user_input = input("ask the query:- ")
+        if user_input == "exit":
+            print("Good Bye🫡")
+            break
+
+        results = retriever.invoke(user_input)
+        context = "\n\n".join([doc.page_content for doc in results])
+        # print("Retrieved context:", context)
+
+        prompt = template.render(user_query=user_input, context=context)
+        payload = {
+            "model": "nvidia/nemotron-3-super-120b-a12b",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7
+        }
+
+        response = requests.post(url, headers=headers, json=payload)
+        data = response.json()
+        answer = data['choices'][0]['message']['content']
+        print("\nAnswer:", answer, "\n")
+
+
+if __name__ == "__main__":
+    main()
