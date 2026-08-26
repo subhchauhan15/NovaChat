@@ -1,5 +1,7 @@
 from langchain_text_splitters import SentenceTransformersTokenTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.retrievers import BM25Retriever
+from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from jinja2 import Environment, FileSystemLoader
 from dotenv import load_dotenv
@@ -17,7 +19,7 @@ template = env.get_template("prompt.jinja")
 API_KEY = os.getenv("NVIDIA_API_KEY")
 
 class NvidiaEmbeddings(Embeddings):
-    def __init__(self, api_key, url=NVIDIA_EMBEDDINGS_URL, model="nvidia/nv-embed-v1"):
+    def __init__(self, api_key, url=NVIDIA_EMBEDDINGS_URL, model="nvidia/nemotron-3-embed-1b"):
         self.api_key = api_key
         self.url = url
         self.model = model
@@ -42,7 +44,6 @@ class NvidiaEmbeddings(Embeddings):
     def embed_query(self, text):
         # User ki query embed karne ke liye (retriever.invoke ke waqt)
         return self._embed([text])[0]
-
 
 def load_docs():
     docs = []
@@ -103,6 +104,13 @@ def main():
     vec = load_vectorstore()
     retriever = vec.as_retriever(search_type="mmr", k=2)
 
+    stored = vec.get()
+    retriever_bm = BM25Retriever.from_documents(
+        [Document(page_content=text, metadata=meta)
+         for text, meta in zip(stored["documents"], stored["metadatas"])],
+        k=2
+    )
+
     while True:
         user_input = input("ask the query:- ")
         if user_input == "exit":
@@ -110,10 +118,11 @@ def main():
             break
 
         results = retriever.invoke(user_input)
+        results_bm=retriever_bm.invoke(user_input)
         context = "\n\n".join([doc.page_content for doc in results])
-        # print("Retrieved context:", context)
+        context_bm="\n\n".join([doc.page_content for doc in results_bm])
 
-        prompt = template.render(user_query=user_input, context=context)
+        prompt = template.render(user_query=user_input, context=context, context_bm=context_bm)
         payload = {
             "model": "nvidia/nemotron-3-super-120b-a12b",
             "messages": [{"role": "user", "content": prompt}],
