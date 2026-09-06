@@ -94,7 +94,7 @@ def load_vectorstore(persist_dir="chroma_db"):
     return vector_store
 
 
-def main():
+def main(user_input: str) -> str:
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {API_KEY}",
@@ -111,29 +111,29 @@ def main():
         k=2
     )
 
+    results = retriever.invoke(user_input)
+    results_bm = retriever_bm.invoke(user_input)
+    context = "\n\n".join([doc.page_content for doc in results])
+    context_bm = "\n\n".join([doc.page_content for doc in results_bm])
+
+    prompt = template.render(user_query=user_input, context=context, context_bm=context_bm)
+    payload = {
+        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7
+    }
+
+    response = requests.post(url, headers=headers, json=payload)
+    data = response.json()
+    print("STATUS:", response.status_code)
+    print("RESPONSE:", data)
+    return data['choices'][0]['message']['content']
+
+
+if __name__ == "__main__":
     while True:
         user_input = input("ask the query:- ")
         if user_input == "exit":
             print("Good Bye🫡")
             break
-
-        results = retriever.invoke(user_input)
-        results_bm=retriever_bm.invoke(user_input)
-        context = "\n\n".join([doc.page_content for doc in results])
-        context_bm="\n\n".join([doc.page_content for doc in results_bm])
-
-        prompt = template.render(user_query=user_input, context=context, context_bm=context_bm)
-        payload = {
-            "model": "nvidia/nemotron-3-super-120b-a12b",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7
-        }
-
-        response = requests.post(url, headers=headers, json=payload)
-        data = response.json()
-        answer = data['choices'][0]['message']['content']
-        print("\nAnswer:", answer, "\n")
-
-
-if __name__ == "__main__":
-    main()
+        print("\nAnswer:", main(user_input), "\n")
